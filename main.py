@@ -64,6 +64,8 @@ class UserModel(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     posts = relationship("PostModel", back_populates="owner", cascade="all, delete-orphan")
+
+    comments = relationship("CommentModel", back_populates="owner", cascade="all, delete-orphan")
     
     # Many-to-many relationship for followers
     following = relationship(
@@ -88,9 +90,26 @@ class PostModel(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
 
     owner = relationship("UserModel", back_populates="posts")
+
+    comments = relationship("CommentModel", back_populates="post", cascade="all, delete-orphan")
     
     # Users who liked this post
     liked_by = relationship("UserModel", secondary=likes_association, back_populates="liked_posts")
+
+
+class CommentModel(Base):
+    __tablename__ = "comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    text = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    post_id = Column(Integer, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
+
+    # Relationships
+    owner = relationship("UserModel", back_populates="comments")
+    post = relationship("PostModel", back_populates="comments")
 
 
 Base.metadata.create_all(bind=engine)
@@ -163,6 +182,20 @@ class PostResponse(BaseModel):
     created_at: datetime
     user_id: int
     like_count: int
+
+    class Config:
+        from_attributes = True
+
+class CommentCreate(BaseModel):
+    text: str
+
+class CommentResponse(BaseModel):
+    id: int
+    text: str
+    created_at: datetime
+    user_id: int
+    post_id: int
+    username: str # Extra detail to easily show who commented on the UI
 
     class Config:
         from_attributes = True
@@ -262,3 +295,56 @@ def like_post(post_id: int, current_user: UserModel = Depends(get_current_user),
     current_user.liked_posts.append(post)
     db.commit()
     return {"message": "Post liked successfully", "likes": len(post.liked_by)}
+
+# --- COMMENT ROUTES (Protected & Public) ---
+
+@app.post("/posts/{post_id}/comments", response_model=CommentResponse, status_code=status.HTTP_201_CREATED, tags=["Comments"])
+def add_comment(post_id: int, comment_in: CommentCreate, current_user: UserModel = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Verify post exists
+    post = db.query(PostModel).filter(PostModel.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+        
+    new_comment = CommentModel(
+        text=comment_in.text,
+        user_id=current_user.id,
+        post_id=post_id
+    )
+    db.add(new_comment)
+    db.commit()
+    db.refresh(new_comment)
+    
+    # Manually attach username for the response schema validation
+    new_comment.username = current_user.username
+    return new_comment
+
+
+@app.get("/posts/{post_id}/comments", response_model=List[CommentResponse], tags=["Comments"])
+def get_post_comments(post_id: int, skip: int = 0, limit: int = 20, db: Session = Depends(get_db)):
+    # Verify post exists
+    post = db.query(PostModel).filter(PostModel.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+        
+    comments = db.query(CommentModel).filter(CommentModel.post_id == post_id).offset(skip).limit(limit).all()
+    
+    # Inject username dynamically for each comment item
+    for comment in comments:
+        comment.username = comment.owner.username
+        
+    return comments
+
+
+@app.delete("/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Comments"])
+def delete_comment(comment_id: int, current_user: UserModel = Depends(get_current_user), db: Session = Depends(get_db)):
+    comment = db.query(CommentModel).filter(CommentModel.id == comment_id).first()
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+        
+    # Authorization safeguard: Ensure the user deleting it is the one who made it
+    if comment.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this comment")
+        
+    db.delete(comment)
+    db.commit()
+    return None
