@@ -8,12 +8,14 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from passlib.context import CryptContext
 import jwt
+import os
 
 # ==========================================
 # 1. CONFIGURATION & SECURITY SETUP
 # ==========================================
 DATABASE_URL = "sqlite:///./instagram_backend.db"
-SECRET_KEY = "SUPER_SECRET_INSTAGRAM_KEY_DONT_SHARE"  # Change in production
+SECRET_KEY = os.getenv("SECRET_KEY", "SUPER_SECRET_INSTAGRAM_KEY_DONT_SHARE")
+PORT = int(os.getenv("PORT", 8000))
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
@@ -460,7 +462,12 @@ def delete_comment(comment_id: int, current_user: UserModel = Depends(get_curren
         raise HTTPException(status_code=404, detail="Comment not found")
     if comment.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to delete this comment")
-        
+
     db.delete(comment)
     db.commit()
     return None
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
