@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, Table, text
 from sqlalchemy.ext.declarative import declarative_base
@@ -9,6 +10,10 @@ from sqlalchemy.orm import sessionmaker, Session, relationship
 from passlib.context import CryptContext
 import jwt
 import os
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ==========================================
 # 1. CONFIGURATION & SECURITY SETUP
@@ -106,26 +111,31 @@ class CommentModel(Base):
     post = relationship("PostModel", back_populates="comments")
 
 
-Base.metadata.create_all(bind=engine)
+try:
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database tables created successfully")
+except Exception as e:
+    logger.error(f"Error creating database tables: {e}")
 
 # ==========================================
 # AUTO-MIGRATION: Add missing columns safely
-# This handles the case where the DB was created before new columns were added.
 # ==========================================
 def run_migrations():
     migrations = [
         ("users", "avatar_url", "VARCHAR"),
         ("users", "bio",        "TEXT"),
     ]
-    with engine.connect() as conn:
-        for table, col, definition in migrations:
-            try:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {definition}"))
-                conn.commit()
-                print(f"[migration] Added column '{col}' to '{table}'")
-            except Exception:
-                # Column already exists — safe to ignore
-                pass
+    try:
+        with engine.connect() as conn:
+            for table, col, definition in migrations:
+                try:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {definition}"))
+                    conn.commit()
+                    logger.info(f"Added column '{col}' to '{table}'")
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.error(f"Migration error: {e}")
 
 run_migrations()
 
@@ -234,25 +244,46 @@ class CommentResponse(BaseModel):
 # ==========================================
 app = FastAPI(title="Instagram Backend - Comprehensive API")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return {"detail": "Internal server error", "error": str(exc)}
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "message": "API is running"}
+
 # --- AUTH ROUTES ---
 
 @app.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED, tags=["Auth"])
 def register(user_in: UserRegister, db: Session = Depends(get_db)):
-    if db.query(UserModel).filter(UserModel.username == user_in.username).first():
-        raise HTTPException(status_code=400, detail="Username already exists")
-    if db.query(UserModel).filter(UserModel.email == user_in.email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
-        
-    new_user = UserModel(
-        username=user_in.username,
-        email=user_in.email,
-        hashed_password=get_password_hash(user_in.password),
-        bio=user_in.bio
-    )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    return new_user
+    try:
+        if db.query(UserModel).filter(UserModel.username == user_in.username).first():
+            raise HTTPException(status_code=400, detail="Username already exists")
+        if db.query(UserModel).filter(UserModel.email == user_in.email).first():
+            raise HTTPException(status_code=400, detail="Email already registered")
+
+        new_user = UserModel(
+            username=user_in.username,
+            email=user_in.email,
+            hashed_password=get_password_hash(user_in.password),
+            bio=user_in.bio
+        )
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        return new_user
+    except Exception as e:
+        logger.error(f"Register error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.post("/login", response_model=TokenResponse, tags=["Auth"])
