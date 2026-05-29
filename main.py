@@ -254,8 +254,13 @@ app.add_middleware(
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    return {"detail": "Internal server error", "error": str(exc)}
+    error_msg = str(exc)
+    logger.error(f"Unhandled exception: {error_msg}", exc_info=True)
+    return {
+        "detail": "Internal server error",
+        "error": error_msg,
+        "type": type(exc).__name__
+    }
 
 @app.get("/health")
 def health_check():
@@ -282,8 +287,8 @@ def register(user_in: UserRegister, db: Session = Depends(get_db)):
         db.refresh(new_user)
         return new_user
     except Exception as e:
-        logger.error(f"Register error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.error(f"Register error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/login", response_model=TokenResponse, tags=["Auth"])
