@@ -350,76 +350,106 @@ def get_user_by_id(user_id: int, db: Session = Depends(get_db)):
 
 @app.post("/posts/", response_model=PostResponse, status_code=status.HTTP_201_CREATED, tags=["Posts"])
 def create_post(post_in: PostCreate, current_user: UserModel = Depends(get_current_user), db: Session = Depends(get_db)):
-    new_post = PostModel(**post_in.model_dump(), user_id=current_user.id)
-    db.add(new_post)
-    db.commit()
-    db.refresh(new_post)
-    new_post.like_count = 0
-    return new_post
+    try:
+        logger.info(f"Creating post for user {current_user.id}")
+        new_post = PostModel(**post_in.model_dump(), user_id=current_user.id)
+        db.add(new_post)
+        db.commit()
+        db.refresh(new_post)
+        new_post.like_count = 0
+        logger.info(f"Post created successfully: {new_post.id}")
+        return new_post
+    except Exception as e:
+        logger.error(f"Error creating post: {str(e)}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error creating post: {str(e)}")
 
 
 @app.get("/posts/", response_model=List[PostResponse], tags=["Posts"])
 def get_all_posts(skip: int = 0, limit: int = 10, db: Session = Depends(get_db)):
-    posts = db.query(PostModel).offset(skip).limit(limit).all()
-    for post in posts:
-        post.like_count = len(post.liked_by)
-    return posts
+    try:
+        posts = db.query(PostModel).offset(skip).limit(limit).all()
+        for post in posts:
+            post.like_count = len(post.liked_by)
+        return posts
+    except Exception as e:
+        logger.error(f"Error fetching posts: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error fetching posts: {str(e)}")
 
 
 @app.get("/posts/feed", response_model=List[PostResponse], tags=["Home Feed"])
 def get_home_feed(skip: int = 0, limit: int = 15, current_user: UserModel = Depends(get_current_user), db: Session = Depends(get_db)):
-    followed_user_ids = [user.id for user in current_user.following]
-    
-    feed_posts = db.query(PostModel)\
-                   .filter(PostModel.user_id.in_(followed_user_ids))\
-                   .order_by(PostModel.created_at.desc())\
-                   .offset(skip)\
-                   .limit(limit)\
-                   .all()
-                   
-    for post in feed_posts:
-        post.like_count = len(post.liked_by)
-        
-    return feed_posts
+    try:
+        followed_user_ids = [user.id for user in current_user.following]
+
+        feed_posts = db.query(PostModel)\
+                       .filter(PostModel.user_id.in_(followed_user_ids))\
+                       .order_by(PostModel.created_at.desc())\
+                       .offset(skip)\
+                       .limit(limit)\
+                       .all()
+
+        for post in feed_posts:
+            post.like_count = len(post.liked_by)
+
+        return feed_posts
+    except Exception as e:
+        logger.error(f"Error fetching feed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error fetching feed: {str(e)}")
 
 
 @app.get("/posts/{post_id}", response_model=PostResponse, tags=["Posts"])
 def get_single_post(post_id: int, db: Session = Depends(get_db)):
-    post = db.query(PostModel).filter(PostModel.id == post_id).first()
-    if not post:
-        raise HTTPException(status_code=404, detail="Post not found")
-    post.like_count = len(post.liked_by)
-    return post
+    try:
+        post = db.query(PostModel).filter(PostModel.id == post_id).first()
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+        post.like_count = len(post.liked_by)
+        return post
+    except Exception as e:
+        logger.error(f"Error fetching post {post_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error fetching post: {str(e)}")
 
 
 @app.put("/posts/{post_id}", response_model=PostResponse, tags=["Posts"])
 def update_post(post_id: int, post_update: PostUpdate, current_user: UserModel = Depends(get_current_user), db: Session = Depends(get_db)):
-    post = db.query(PostModel).filter(PostModel.id == post_id).first()
-    if not post:
-        raise HTTPException(status_code=404, detail="Post not found")
-    if post.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Not authorized to edit this post")
-        
-    if post_update.caption is not None:
-        post.caption = post_update.caption
-        
-    db.commit()
-    db.refresh(post)
-    post.like_count = len(post.liked_by)
-    return post
+    try:
+        post = db.query(PostModel).filter(PostModel.id == post_id).first()
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+        if post.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to edit this post")
+
+        if post_update.caption is not None:
+            post.caption = post_update.caption
+
+        db.commit()
+        db.refresh(post)
+        post.like_count = len(post.liked_by)
+        return post
+    except Exception as e:
+        logger.error(f"Error updating post {post_id}: {str(e)}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error updating post: {str(e)}")
 
 
 @app.delete("/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Posts"])
 def delete_post(post_id: int, current_user: UserModel = Depends(get_current_user), db: Session = Depends(get_db)):
-    post = db.query(PostModel).filter(PostModel.id == post_id).first()
-    if not post:
-        raise HTTPException(status_code=404, detail="Post not found")
-    if post.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Not authorized to delete this post")
-        
-    db.delete(post)
-    db.commit()
-    return None
+    try:
+        post = db.query(PostModel).filter(PostModel.id == post_id).first()
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+        if post.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this post")
+
+        db.delete(post)
+        db.commit()
+        logger.info(f"Post {post_id} deleted successfully")
+        return None
+    except Exception as e:
+        logger.error(f"Error deleting post {post_id}: {str(e)}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting post: {str(e)}")
 
 
 # --- SOCIAL FEATURES (Follow & Like) ---
